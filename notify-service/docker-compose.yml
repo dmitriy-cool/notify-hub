@@ -1,0 +1,115 @@
+services:
+  postgres_db:
+    image: postgres:16-alpine
+    container_name: postgres_db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres          
+      POSTGRES_PASSWORD: sanji  
+      POSTGRES_DB: notifyhub_db            
+    ports:
+      - "5434:5432"
+    volumes:
+      - new_postgres_data:/var/lib/postgresql
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    restart: always
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: always
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    container_name: api
+    restart: always
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres_db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:sanji@postgres_db:5432/notifyhub_db
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - USE_MOCK_SMTP=false
+      - SMTP_HOST=smtp.yandex.ru
+      - SMTP_PORT=465
+      - SMTP_USER=dmitriycooll@yandex.ru
+      - SMTP_PASSWORD=fokjxrxunqektoyc
+      - JWT_SECRET_KEY=pineapple
+      - JWT_ALGORITHM=HS256
+    volumes:
+      - .:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    networks:
+      - app-network
+
+  celery_worker:
+    build: .
+    container_name: celery_worker
+    restart: always
+    command: celery -A app.celery worker --loglevel=info
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres_db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:sanji@postgres_db:5432/notifyhub_db
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - USE_MOCK_SMTP=false
+      - SMTP_HOST=smtp.yandex.ru
+      - SMTP_PORT=465
+      - SMTP_USER=dmitriycooll@yandex.ru
+      - SMTP_PASSWORD=fokjxrxunqektoyc
+    volumes:
+      - .:/app
+    networks:
+      - app-network
+
+volumes:
+  new_postgres_data:
+
+networks:
+  app-network:
+    driver: bridge
